@@ -272,6 +272,15 @@ public class JsonRpcMgo implements MgoClient {
     }
 
     @Override
+    public Request<?, TransactionBlockBytesWrapper> payAllMgo(UnsafePayAllMgo request) {
+        return new Request<>(
+                "unsafe_payAllMgo",
+                Arrays.asList(request.getSigner(), request.getInputCoins(), request.getRecipient(), request.getGasBudget()),
+                mgoService,
+                TransactionBlockBytesWrapper.class);
+    }
+
+    @Override
     public Request<?, TransactionBlockBytesWrapper> transferObject(UnsafeTransferObject request) {
         return new Request<>(
                 "unsafe_transferObject",

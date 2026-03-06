@@ -6,7 +6,7 @@
 
     <groupId>io.mangonet</groupId>
     <artifactId>mgo4j</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <name>mgo4j</name>
     <description>A Mgo SDK designed for building maintainable, high-performance Java servers.</description>
     <url>https://github.com/devtestttttt/mgo4j</url>

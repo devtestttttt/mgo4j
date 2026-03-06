@@ -181,6 +181,14 @@ public interface Mgo {
      */
     Request<?, TransactionBlockBytesWrapper> payMgo(UnsafePayMgo request);
 
+
+    /**
+     * Transfer all mgo
+     * @param request
+     * @return
+     */
+    Request<?, TransactionBlockBytesWrapper> payAllMgo(UnsafePayAllMgo request);
+
     /**
      * Transfer object
      * @param request
