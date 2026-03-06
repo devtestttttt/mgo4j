@@ -1,0 +1,386 @@
+package io.mangonet.mgo.crypto;
+
+import io.mangonet.mgo.bcs.BcsRegistry;
+import io.mangonet.mgo.bcs.types.intent.IntentScope;
+import io.mangonet.mgo.crypto.exceptions.SignatureSchemeNotSupportedException;
+import io.mangonet.mgo.crypto.exceptions.SigningException;
+import io.mangonet.mgo.crypto.signature.SignatureScheme;
+import org.bitcoinj.core.Bech32;
+import org.bouncycastle.crypto.digests.KeccakDigest;
+import org.bouncycastle.jcajce.provider.digest.Keccak;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.util.encoders.Base64;
+import org.bouncycastle.util.encoders.Hex;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.security.SecureRandom;
+import java.security.Security;
+import java.util.Arrays;
+
+public abstract class MgoKeyPair<T> {
+
+    private static final String MGO_PRIVATE_KEY_PREFIX = "mgoprivkey";
+    private static final int PRIVATE_KEY_SIZE = 32;
+    protected final static String ADDRESS_PREFIX = "0x";
+    protected static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    static {
+        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+    }
+
+    /** The Key pair. */
+    protected T keyPair;
+
+    /**
+     * Gets key pair.
+     *
+     * @return the key pair
+     */
+    public T getKeyPair() {
+        return keyPair;
+    }
+
+    @Override
+    public String toString() {
+        return "MgoKeyPair{" + "keyPair=" + keyPair + '}';
+    }
+
+    /**
+     * Address string.
+     *
+     * @return the string
+     */
+    public String address() {
+        byte[] pubKey = this.publicKeyBytes();
+        // 1. Concatenate flag + pubkey
+        byte[] flagAndPubkey = new byte[1 + pubKey.length];
+        flagAndPubkey[0] = this.signatureScheme().getScheme(); // flag
+        System.arraycopy(pubKey, 0, flagAndPubkey, 1, pubKey.length);
+
+        Keccak.Digest256 keccak256 = new Keccak.Digest256();
+        keccak256.update(flagAndPubkey, 0, flagAndPubkey.length);
+        byte[] addressBytes = keccak256.digest();
+
+        return ADDRESS_PREFIX + Hex.toHexString(addressBytes);
+    }
+
+    /**
+     * Public key string.
+     *
+     * @return the string
+     */
+    public String publicKey() {
+        return Hex.toHexString(this.publicKeyBytes());
+    }
+
+    /**
+     * Public key byte [ ].
+     *
+     * @return the byte [ ]
+     */
+    public abstract byte[] publicKeyBytes();
+
+    /**
+     * Signature scheme.
+     *
+     * @return the signature scheme
+     */
+    public abstract SignatureScheme signatureScheme();
+
+    /**
+     * mgo signWithIntent.
+     * format:flag || signature || pubkey
+     * @param msgBytes the msg bytes
+     * @param intentScope intentScope
+     * @return the bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signWithIntent(byte[] msgBytes, IntentScope intentScope) throws SigningException {
+        // 1. Concatenate intent
+        int msgLength = msgBytes.length;
+        byte[] intentBytes = intentScope.getScope();
+        int intentLength = intentBytes.length;
+        byte[] intentMessage = new byte[intentLength + msgLength];
+        System.arraycopy(intentBytes, 0, intentMessage, 0, intentLength);
+        System.arraycopy(msgBytes, 0, intentMessage, intentLength, msgLength);
+
+        // 2. calculate digest(Keccak-256)
+        byte[] digest = keccak256(intentMessage);
+        // 3. sign
+        byte[] signature = this.sign(digest);
+        byte[] pubkey = this.publicKeyBytes();
+        ByteBuffer buffer = ByteBuffer.allocate(1 + signature.length + pubkey.length);
+        buffer.put(this.signatureScheme().getScheme());
+        buffer.put(signature);
+        buffer.put(pubkey);
+        return buffer.array();
+    }
+
+    /**
+     * mgo signWithIntent.
+     * format:signature
+     * @param msgBytes the msg bytes
+     * @param intentScope intentScope
+     * @return the bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signSignatureWithIntent(byte[] msgBytes, IntentScope intentScope) throws SigningException {
+        // 1. Concatenate intent
+        int msgLength = msgBytes.length;
+        byte[] intentBytes = intentScope.getScope();
+        int intentLength = intentBytes.length;
+        byte[] intentMessage = new byte[intentLength + msgLength];
+        System.arraycopy(intentBytes, 0, intentMessage, 0, intentLength);
+        System.arraycopy(msgBytes, 0, intentMessage, intentLength, msgLength);
+        // 2. calculate digest(Keccak-256)
+        byte[] digest = keccak256(intentMessage);
+        // 3. sign
+        return this.sign(digest);
+    }
+
+    /**
+     * mgo signWithIntent.
+     * return sign format: flag || signature || pubkey
+     * @param msgBytes the msg bytes
+     * @param intentScope intentScope
+     * @return the base64 string
+     * @throws SigningException the signing exception
+     */
+    public String signWithIntentBase64(byte[] msgBytes, IntentScope intentScope) throws SigningException {
+        return Base64.toBase64String(this.signWithIntent(msgBytes, intentScope));
+    }
+
+    /**
+     * mgo signWithIntent. Personal
+     * return sign format: flag || signature || pubkey
+     * @param msg the msg bytes
+     * @return the base64 bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signPersonalMessage(byte[] msg) throws SigningException, IOException {
+        byte[] bytes = BcsRegistry.serializeToBytes(msg, BcsRegistry.BYTE_ARRAY_SERIALIZER);
+        return this.signWithIntent(bytes, IntentScope.PersonalMessage.INSTANCE);
+    }
+
+    /**
+     * mgo signWithIntent. Personal
+     * return sign format: flag || signature || pubkey
+     * @param msg the msg
+     * @return the base64 bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signPersonalMessage(String msg) throws SigningException, IOException {
+        byte[] bytes = BcsRegistry.serializeToBytes(msg, BcsRegistry.STRING_SERIALIZER);
+        return this.signWithIntent(bytes, IntentScope.PersonalMessage.INSTANCE);
+    }
+
+    /**
+     * mgo signWithIntent. Personal
+     * return sign format: flag || signature || pubkey
+     * @param msg the msg byte
+     * @return the base64 string
+     * @throws SigningException the signing exception
+     */
+    public String signPersonalMessageBase64(byte[] msg) throws SigningException, IOException {
+        return Base64.toBase64String(this.signPersonalMessage(msg));
+    }
+
+    /**
+     * mgo signWithIntent. Personal
+     * return sign format: flag || signature || pubkey
+     * @param msg the msg
+     * @return the base64 string
+     * @throws SigningException the signing exception
+     */
+    public String signPersonalMessageBase64(String msg) throws SigningException, IOException {
+        return Base64.toBase64String(this.signPersonalMessage(msg));
+    }
+
+    /**
+     * mgo signWithIntent. TransactionData
+     * return sign format: flag || signature || pubkey
+     * @param msg the msg String
+     * @return the bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signTransactionData(String msg) throws SigningException {
+        return this.signWithIntent(Base64.decode(msg), IntentScope.TransactionData.INSTANCE);
+    }
+
+    /**
+     * mgo signWithIntent. TransactionData
+     * return sign format: flag || signature || pubkey
+     * @param msgBytes the msg base64 bytes
+     * @return the bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signTransactionData(byte[] msgBytes) throws SigningException {
+        return this.signWithIntent(msgBytes, IntentScope.TransactionData.INSTANCE);
+    }
+
+    /**
+     * mgo signWithIntent. TransactionData
+     * return sign format: flag || signature || pubkey
+     * @param msg the msg String
+     * @return the base64 string
+     * @throws SigningException the signing exception
+     */
+    public String signTransactionDataBase64(String msg) throws SigningException {
+        return Base64.toBase64String(this.signWithIntent(Base64.decode(msg), IntentScope.TransactionData.INSTANCE));
+    }
+
+    /**
+     * mgo signWithIntent. TransactionData
+     * return sign format: flag || signature || pubkey
+     * @param msgBytes the msg base64 bytes
+     * @return the base64 string
+     * @throws SigningException the signing exception
+     */
+    public String signTransactionDataBase64(byte[] msgBytes) throws SigningException {
+        return Base64.toBase64String(this.signWithIntent(msgBytes, IntentScope.TransactionData.INSTANCE));
+    }
+
+    /**
+     * mgo signWithIntent. Personal
+     * return sign format: signature
+     * @param msg the msg bytes
+     * @return the base64 bytes
+     * @throws SigningException the signing exception
+     */
+    public byte[] signSignaturePersonalMessage(byte[] msg) throws SigningException, IOException {
+        byte[] bytes = BcsRegistry.serializeToBytes(msg, BcsRegistry.BYTE_ARRAY_SERIALIZER);
+        return this.signSignatureWithIntent(bytes, IntentScope.PersonalMessage.INSTANCE);
+    }
+
+    /**
+     *  base sign string.
+     *
+     * @param msg the msg
+     * @return the string
+     * @throws SigningException the signing exception
+     */
+    public abstract byte[] sign(byte[] msg) throws SigningException;
+
+    /**
+     * keccak256 summary
+     * @param message
+     * @return
+     */
+    public static byte[] keccak256(byte[] message) {
+        KeccakDigest digest = new KeccakDigest(256);
+        digest.update(message, 0, message.length);
+        byte[] hash = new byte[32];
+        digest.doFinal(hash, 0);
+        return hash;
+    }
+
+    /**
+     * Decode hex mgo key pair.
+     *
+     * @param encoded the encoded
+     * @return the mgo key pair
+     * @throws SignatureSchemeNotSupportedException the signature scheme not supported exception
+     */
+    public static MgoKeyPair<?> decodeHex(String encoded, SignatureScheme scheme)
+            throws SignatureSchemeNotSupportedException {
+        return switch (scheme) {
+            case ED25519 -> Ed25519KeyPair.decodeHex(encoded);
+            case SECP256K1 -> Secp256k1KeyPair.decodeHex(encoded);
+//            case SECP256R1 -> Secp256r1KeyPair.decodeHex(keyPairBytes);
+//            case MULTISIG -> MultisigKeyPair.decodeHex(keyPairBytes);
+//            case ZKLOGIN -> ZkLoginKeyPair.decodeHex(keyPairBytes);
+//            case PASSKEY -> PassKeyKeyPair.decodeHex(keyPairBytes);
+            default -> throw new SignatureSchemeNotSupportedException();
+        };
+    }
+
+    /**
+     * Decode bytes mgo key pair.
+     *
+     * @param encoded the bytes
+     * @return the mgo key pair
+     * @throws SignatureSchemeNotSupportedException the signature scheme not supported exception
+     */
+    public static MgoKeyPair<?> decode(byte[] encoded, SignatureScheme scheme)
+            throws SignatureSchemeNotSupportedException {
+        return switch (scheme) {
+            case ED25519 -> Ed25519KeyPair.decode(encoded);
+            case SECP256K1 -> Secp256k1KeyPair.decode(encoded);
+//            case SECP256R1 -> Secp256r1KeyPair.decode(keyPairBytes);
+//            case MULTISIG -> MultisigKeyPair.decode(keyPairBytes);
+//            case ZKLOGIN -> ZkLoginKeyPair.decode(keyPairBytes);
+//            case PASSKEY -> PassKeyKeyPair.decode(keyPairBytes);
+            default -> throw new SignatureSchemeNotSupportedException();
+        };
+    }
+
+    /**
+     * encode hex mgo key.
+     *
+     * @return the mgo key
+     */
+    public abstract String encodePrivateKey();
+
+    /**
+     * byte[] mgo key.
+     *
+     * @return the mgo key
+     */
+    public abstract byte[] privateKey();
+
+    /**
+     * Encode mgoprivkey
+     * @param privateKey
+     * @param scheme
+     * @return
+     */
+    public static String encodeMgoPrivateKey(byte[] privateKey, SignatureScheme scheme) {
+        if (privateKey.length != PRIVATE_KEY_SIZE) {
+            throw new IllegalArgumentException("Invalid private key length: " + privateKey.length);
+        }
+
+        Byte flag = scheme.getScheme();
+
+        // flag || privateKey
+        byte[] data = new byte[PRIVATE_KEY_SIZE + 1];
+        data[0] = flag;
+        System.arraycopy(privateKey, 0, data, 1, PRIVATE_KEY_SIZE);
+
+        // Bech32 encode
+        return Bech32.encode(Bech32.Encoding.BECH32, MGO_PRIVATE_KEY_PREFIX, Bech32Words.toWords(data));
+    }
+
+    /**
+     * Decode mgoprivkey
+     * @param bech32String
+     * @return
+     */
+    public static MgoKeyPair decodeMgoPrivateKey(String bech32String) {
+        Bech32.Bech32Data decoded = Bech32.decode(bech32String);
+        if (!MGO_PRIVATE_KEY_PREFIX.equals(decoded.hrp)) {
+            throw new IllegalArgumentException("Invalid private key prefix: " + decoded.hrp);
+        }
+
+        byte[] extended = Bech32Words.fromWords(decoded.data);
+        if (extended.length != PRIVATE_KEY_SIZE + 1) {
+            throw new IllegalArgumentException("Invalid encoded key length");
+        }
+
+        byte flag = extended[0];
+        SignatureScheme scheme = SignatureScheme.findByScheme(flag);
+        if (scheme == null) {
+            throw new IllegalArgumentException("Unknown signature flag: " + flag);
+        }
+
+        byte[] secretKey = Arrays.copyOfRange(extended, 1, extended.length);
+        switch (scheme) {
+            case ED25519 -> {return new Ed25519KeyPair(secretKey);}
+            case SECP256K1 -> {return new Secp256k1KeyPair(secretKey);}
+            default -> throw new SignatureSchemeNotSupportedException();
+        }
+    }
+
+}

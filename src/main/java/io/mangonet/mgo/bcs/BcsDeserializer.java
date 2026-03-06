@@ -1,0 +1,328 @@
+package io.mangonet.mgo.bcs;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+public class BcsDeserializer {
+    
+    private final ByteArrayInputStream input;
+    private final ByteBuffer buffer;
+    private final byte[] tempBuffer;
+    
+    public BcsDeserializer(byte[] data) {
+        this.input = new ByteArrayInputStream(data);
+        this.buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+        this.tempBuffer = new byte[8];
+    }
+    
+    /**
+     * Deserialize u8 type
+     */
+    public byte readU8() throws IOException {
+        int value = input.read();
+        if (value == -1) {
+            throw new IOException("Unexpected end of input");
+        }
+        return (byte) value;
+    }
+    
+    /**
+     * Deserialize u16 type
+     */
+    public short readU16() throws IOException {
+        int bytesRead = input.read(tempBuffer, 0, 2);
+        if (bytesRead != 2) {
+            throw new IOException("Unexpected end of input");
+        }
+        
+        buffer.clear();
+        buffer.put(tempBuffer, 0, 2);
+        buffer.flip();
+        return buffer.getShort();
+    }
+    
+    /**
+     * Deserialize u32 type
+     */
+    public int readU32() throws IOException {
+        int bytesRead = input.read(tempBuffer, 0, 4);
+        if (bytesRead != 4) {
+            throw new IOException("Unexpected end of input");
+        }
+        
+        buffer.clear();
+        buffer.put(tempBuffer, 0, 4);
+        buffer.flip();
+        return buffer.getInt();
+    }
+    
+    /**
+     * Deserialize u64 type
+     */
+    public long readU64() throws IOException {
+        int bytesRead = input.read(tempBuffer, 0, 8);
+        if (bytesRead != 8) {
+            throw new IOException("Unexpected end of input");
+        }
+        
+        buffer.clear();
+        buffer.put(tempBuffer, 0, 8);
+        buffer.flip();
+        return buffer.getLong();
+    }
+    
+    /**
+     * Deserialize u128 type
+     */
+    public BigInteger readU128() throws IOException {
+        byte[] bytes = new byte[16];
+        int bytesRead = input.read(bytes);
+        if (bytesRead != 16) {
+            throw new IOException("Unexpected end of input");
+        }
+        
+        // Reverse byte order (little-endian to big-endian)
+        for (int i = 0; i < 8; i++) {
+            byte temp = bytes[i];
+            bytes[i] = bytes[15 - i];
+            bytes[15 - i] = temp;
+        }
+        
+        return new BigInteger(bytes);
+    }
+    
+    /**
+     * Deserialize u256 type
+     */
+    public BigInteger readU256() throws IOException {
+        byte[] bytes = new byte[32];
+        int bytesRead = input.read(bytes);
+        if (bytesRead != 32) {
+            throw new IOException("Unexpected end of input");
+        }
+        
+        // Reverse byte order (little-endian to big-endian)
+        for (int i = 0; i < 16; i++) {
+            byte temp = bytes[i];
+            bytes[i] = bytes[31 - i];
+            bytes[31 - i] = temp;
+        }
+        
+        return new BigInteger(bytes);
+    }
+    
+    /**
+     * Deserialize boolean type
+     */
+    public boolean readBool() throws IOException {
+        byte value = readU8();
+        if (value != 0 && value != 1) {
+            throw new IOException("Invalid boolean value: " + value);
+        }
+        return value == 1;
+    }
+
+    /**
+     * Deserialize length ULEB128 encoding
+     */
+    public int readUleb128() throws IOException {
+        int result = 0;
+        int shift = 0;
+        byte b;
+
+        do {
+            b = (byte) input.read();  // read next byte
+            if (b == -1) {
+                throw new IOException("Unexpected end of input during ULEB128 decoding");
+            }
+
+            // Concatenate 7-bit data into result
+            result |= (b & 0x7F) << shift;
+            shift += 7;
+
+            // If shift exceeds 32 bits, the number value is too large
+            if (shift >= 32) {
+                throw new IOException("ULEB128 value exceeds maximum supported size (32-bit)");
+            }
+        } while ((b & 0x80) != 0);  // check continue bit
+
+        return result;
+    }
+
+    /**
+     * Deserialize Pure length nested ULEB128 encoding
+     */
+    public int readUleb128Pure() throws IOException {
+        // read totalLen
+        int totalLen = readUleb128();
+        if (totalLen == 0) {
+            return totalLen;
+        }
+
+        // read innerLen
+        int innerLen = readUleb128();
+
+        if (innerLen > totalLen) {
+            throw new IOException("Inner length > total length");
+        }
+        return innerLen;
+    }
+    
+    /**
+     * Deserialize string
+     */
+    public String readString() throws IOException {
+        int length = readUleb128();
+        byte[] bytes = new byte[length];
+        int bytesRead = input.read(bytes);
+        if (bytesRead != length) {
+            throw new IOException("Unexpected end of input");
+        }
+        return new String(bytes);
+    }
+    
+    /**
+     * Deserialize address
+     */
+    public byte[] readAddress() throws IOException {
+        byte[] bytes = new byte[32];
+        int bytesRead = input.read(bytes);
+        if (bytesRead != 32) {
+            throw new IOException("Unexpected end of input");
+        }
+        return bytes;
+    }
+
+    /**
+     * Deserialize byte array
+     */
+    public byte[] readBytes() throws IOException {
+        int length = readUleb128();
+        byte[] bytes = new byte[length];
+        int bytesRead = input.read(bytes);
+        if (bytesRead != length) {
+            throw new IOException("Unexpected end of input");
+        }
+        return bytes;
+    }
+
+    /**
+     * Deserialize fixed byte array
+     */
+    public byte[] readFixedBytes(int fixedLen) throws IOException {
+        byte[] bytes = new byte[fixedLen];
+        int bytesRead = input.read(bytes);
+        if (bytesRead != fixedLen) {
+            throw new IOException("Unexpected end of input");
+        }
+        return bytes;
+    }
+    
+    /**
+     * Deserialize vector<u8> vector
+     */
+    public byte[] readVector() throws IOException {
+        int length = readUleb128();
+        if (length == 0) {
+            return new byte[0];
+        }
+        byte[] bytes = new byte[length];
+        input.read(bytes);
+        return bytes;
+    }
+
+    /**
+     * Deserialize vector
+     */
+    public <T> List<T> readVector(BcsDeserializer.BcsTypeDeserializer<T> deserializer) throws IOException {
+        int size = readUleb128();
+        List<T> result = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            result.add(deserializer.deserialize(this));
+        }
+        return result;
+    }
+    
+    /**
+     * Deserialize Option type
+     */
+    public <T> T readOption(BcsDeserializer.BcsTypeDeserializer<T> deserializer) throws IOException {
+        byte variant = readU8();
+        if (variant == 0) {
+            return null; // None
+        } else if (variant == 1) {
+            return deserializer.deserialize(this); // Some
+        } else {
+            throw new IOException("Invalid option variant: " + variant);
+        }
+    }
+    
+    /**
+     * Deserialize enum type
+     */
+    public <T> T readEnum(Map<Integer, BcsDeserializer.BcsTypeDeserializer<T>> variantMap) throws IOException {
+        int variant = readU32();
+        BcsDeserializer.BcsTypeDeserializer<T> deserializer = variantMap.get(variant);
+        if (deserializer == null) {
+            throw new IOException("Unknown enum variant: " + variant);
+        }
+        return deserializer.deserialize(this);
+    }
+    
+    /**
+     * Deserialize struct
+     */
+    public <T> T readStruct(BcsDeserializer.BcsTypeDeserializer<T> structDeserializer) throws IOException {
+        return structDeserializer.deserialize(this);
+    }
+    
+    /**
+     * Check if there is more data
+     */
+    public boolean hasMore() {
+        return input.available() > 0;
+    }
+    
+    /**
+     * Get remaining bytes
+     */
+    public int available() {
+        return input.available();
+    }
+    
+    /**
+     * Skip specified bytes
+     */
+    public long skip(long n) throws IOException {
+        return input.skip(n);
+    }
+    
+    /**
+     * Reset deserializer
+     */
+    public void reset() {
+        input.reset();
+    }
+    
+    /**
+     * Close resources
+     */
+    public void close() throws IOException {
+        input.close();
+    }
+
+    /**
+     * BCS type deserializer interface
+     */
+    @FunctionalInterface
+    public interface BcsTypeDeserializer<T> {
+        T deserialize(BcsDeserializer deserializer) throws IOException;
+    }
+
+} 
